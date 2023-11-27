@@ -5,6 +5,6 @@ Preliminary recommendations to improve Yearly Renewal Rate:
 - In case we have a lot of involuntary churn due to insufficient funds or card that has expired, sending a reminder to users about upcoming payment could be a simple low cost solution to reduce churn
 
 Additional information that would be needed:
-- If company has different products and not only subscription lenghts we would need to have useage information about these products to be able to determine if calculated metrics differ for products that company uses
+- If company has different products and not only subscription lenghts we would need to have usage information about these products to be able to determine if calculated metrics differ for products that users use.
 - We would need additional information on how customers use our products. E.g. if there are users who repeatly use all of the allowed amount of data maybe we would be able to upsell them or contrary if users consistenly use a small amount of the allow data maybe we would be able to downsell them instead of them churning
 - We would need more information about subscription status e.g. if subscription was canceled by churned user or just not paid to understand if it was volutary or involuntary churn
