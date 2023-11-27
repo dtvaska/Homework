@@ -246,7 +246,7 @@ cte_yearly_renewal_rate AS (
     retained_users,
     ROUND(retained_users/opening_base, 2) AS yearly_renewal_rate
   FROM cte_active_users_first_day
-  INNER JOIN cte_retained_users
+  LEFT JOIN cte_retained_users
     ON cte_active_users_first_day.year = cte_retained_users.year
 )
 SELECT *
