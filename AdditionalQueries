@@ -1,0 +1,91 @@
+SELECT DATE_TRUNC(payment_date, YEAR), 
+  COUNT(DISTINCT CASE WHEN subscription_length = '1-month' THEN user_id END ) AS length_1_month,
+  COUNT(DISTINCT CASE WHEN subscription_length = '1-year' THEN user_id END ) AS length_1_year,
+  COUNT(DISTINCT CASE WHEN subscription_length = '2-year' THEN user_id END ) AS length_2_years,
+  COUNT(DISTINCT CASE WHEN subscription_length = '3-year' THEN user_id END ) AS length_3_years
+FROM `homework-data2020.customer_data.raw_data`
+GROUP BY 1
+ORDER BY 1
+;
+
+
+WITH cte_subscription_length AS (
+  -- CTE is used to translate subscription length into number of months to calculate next billing date later
+  SELECT 
+    user_id,
+    payment_date,
+    DATE_TRUNC(payment_date, MONTH) AS payment_month,
+    payment_amount,
+    subscription_length,
+    user_payment_number,
+    CASE WHEN subscription_length = '1-month' THEN 1
+         WHEN subscription_length = '1-year' THEN 12
+         WHEN subscription_length = '2-year' THEN 24
+         WHEN subscription_length = '3-year' THEN 36
+      END AS subscription_length_month
+  FROM `homework-data2020.customer_data.raw_data`
+),
+
+cte_next_billing_dates AS (
+  -- CTE is used to calculate next billing date
+  SELECT 
+    user_id,
+    payment_date,
+    payment_month,
+    payment_amount,
+    subscription_length,
+    user_payment_number,
+    DATE_ADD(payment_date, INTERVAL subscription_length_month MONTH) AS next_billing_date
+  FROM cte_subscription_length
+),
+
+cte_user_subscriptions AS (
+  -- CTE is used to calculate subscription period of a user by taking first payment date as subscription start and last next billing value as subscription end
+  SELECT 
+    user_id,
+    payment_date,
+    payment_month,
+    payment_amount,
+    subscription_length,
+    next_billing_date,
+    user_payment_number,
+    FIRST_VALUE(payment_date) 
+        OVER(PARTITION BY user_id ORDER BY payment_date 
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS subscription_start,
+    LAST_VALUE(next_billing_date) 
+        OVER(PARTITION BY user_id ORDER BY payment_date
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS subscription_end,
+  FROM cte_next_billing_dates
+),
+
+cte_total_users AS (
+  SELECT 
+    DATE_TRUNC(payment_date, YEAR) year,
+    subscription_length,
+    COUNT(DISTINCT user_id) AS total_users
+  FROM cte_user_subscriptions
+  GROUP BY 1, 2
+),
+
+cte_churned_users AS (
+  SELECT 
+    DATE_TRUNC(payment_date, YEAR) year,
+    subscription_length,
+    COUNT(DISTINCT user_id) AS churned_users
+  FROM cte_user_subscriptions
+  WHERE subscription_end < (SELECT MAX(payment_date) FROM `homework-data2020.customer_data.raw_data`)
+  GROUP BY 1, 2
+)
+
+/* Calculating churn for different subscription lengths */
+SELECT 
+  cte_total_users.year,
+  cte_total_users.subscription_length,
+  total_users,
+  churned_users,
+  ROUND(churned_users/total_users, 2) AS  churn_rate
+FROM cte_total_users
+LEFT JOIN cte_churned_users
+  ON cte_total_users.year = cte_churned_users.year
+  AND cte_total_users.subscription_length = cte_churned_users.subscription_length
+ORDER BY 1, 2
