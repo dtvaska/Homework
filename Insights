@@ -1,0 +1,10 @@
+Preliminary recommendations to improve Yearly Renewal Rate:
+- Due to high churn rate of users that use monthly plans an attempt should be made to move more people away from monthly subscription plans. Two preliminary suggestions would be to: 
+  1. Allow monthly payments for yearly subscriptions. Rational being that we need to provide more flexibility for our users to make long term subscriptions more appealing and more accessible
+  2. Create additional subscription plans e.g. 3 or 6 month plan. Rational being clients may not be willing to commit to a yearly subscription so we would have less intimitating subscription plans that would still provide more consistency that one month plans.
+- In case we have a lot of involuntary churn due to insufficient funds or card that has expired, sending a reminder to users about upcoming payment could be a simple low cost solution to reduce churn
+
+Additional information that would be needed:
+- If company has different products and not only subscription lenghts we would need to have useage information about these products to be able to determine if calculated metrics differ for products that company uses
+- We would need additional information on how customers use our products. E.g. if there are users who repeatly use all of the allowed amount of data maybe we would be able to upsell them or contrary if users consistenly use a small amount of the allow data maybe we would be able to downsell them instead of them churning
+- We would need more information about subscription status e.g. if subscription was canceled by churned user or just not paid to understand if it was volutary or involuntary churn
