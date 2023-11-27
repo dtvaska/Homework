@@ -1,0 +1,254 @@
+/**********************************************************
+******************** PREANALYSIS PHASE ********************
+**********************************************************/
+
+--------------------------------------------
+-- Checking for duplicate payment values --
+--------------------------------------------
+
+SELECT TRUE, ROW_NUMBER() OVER(PARTITION BY user_id, payment_date ORDER BY payment_date) AS rn
+FROM `homework-data2020.customer_data.raw_data`
+QUALIFY rn > 1
+;
+-- no duplicate payments
+
+--------------------------------------------
+-- Cheking for NULL values in the dataset --
+--------------------------------------------
+SELECT *
+FROM `homework-data2020.customer_data.raw_data`
+WHERE user_id IS NULL
+  OR payment_date IS NULL
+  OR payment_amount IS NULL
+  OR subscription_length IS NULL
+  OR user_payment_number IS NULL
+;
+-- There are no NULL values
+
+-------------------------------------------
+-- Checking for negative payment values --
+-------------------------------------------
+SELECT TRUE
+FROM `homework-data2020.customer_data.raw_data`
+WHERE payment_amount < 0
+;
+-- no negatove payments
+
+-------------------------------------------
+-- Checking for negative payment number --
+-------------------------------------------
+SELECT user_payment_number
+FROM `homework-data2020.customer_data.raw_data`
+WHERE user_payment_number < 0
+;
+-- no negative payment number values
+
+-----------------------------------------------
+-- Checking for typos in subscription length --
+-----------------------------------------------
+SELECT subscription_length
+FROM `homework-data2020.customer_data.raw_data`
+GROUP BY 1
+;
+-- No typos
+
+-- Data has no obvious issues, procceding to the analysis
+
+/**********************************************************
+******************** ANALYSIS PHASE ********************
+**********************************************************/
+ 
+/******************** Creating Customer Base Board ********************/
+
+WITH cte_subscription_length AS (
+  -- CTE is used to translate subscription length into number of months to calculate next billing date later
+  SELECT 
+    user_id,
+    payment_date,
+    DATE_TRUNC(payment_date, MONTH) AS payment_month,
+    payment_amount,
+    subscription_length,
+    user_payment_number,
+    CASE WHEN subscription_length = '1-month' THEN 1
+         WHEN subscription_length = '1-year' THEN 12
+         WHEN subscription_length = '2-year' THEN 24
+         WHEN subscription_length = '3-year' THEN 36
+      END AS subscription_length_month
+  FROM `homework-data2020.customer_data.raw_data`
+),
+
+cte_next_billing_dates AS (
+  -- CTE is used to calculate next billing date
+  SELECT 
+    user_id,
+    payment_date,
+    payment_month,
+    payment_amount,
+    subscription_length,
+    user_payment_number,
+    DATE_ADD(payment_date, INTERVAL subscription_length_month MONTH) AS next_billing_date
+  FROM cte_subscription_length
+),
+
+cte_user_subscriptions AS (
+  -- CTE is used to calculate subscription period of a user by taking first payment date as subscription start and last next billing value as subscription end
+  SELECT 
+    user_id,
+    payment_date,
+    payment_month,
+    payment_amount,
+    subscription_length,
+    next_billing_date,
+    user_payment_number,
+    FIRST_VALUE(payment_date) 
+        OVER(PARTITION BY user_id ORDER BY payment_date 
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS subscription_start,
+    LAST_VALUE(next_billing_date) 
+        OVER(PARTITION BY user_id ORDER BY payment_date
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS subscription_end,
+  FROM cte_next_billing_dates
+),
+
+cte_calendar AS (
+  -- CTE is used to create a calendar that will be used later to connect user subscription periods to
+  SELECT
+    DATE_TRUNC(payment_date, MONTH) AS start_of_month,
+    LASt_DAY(payment_date, MONTH) AS end_of_month
+  FROM `homework-data2020.customer_data.raw_data` 
+  GROUP BY 1, 2
+),
+
+cte_opening_base AS (
+  -- CTE is used to calculate number of user active on the first day of the month. 
+  -- It is calculated by taking users who's subscription started before a particular month or on the first day of it and end later than the end of month
+  SELECT 
+    start_of_month,
+    COUNT(DISTINCT user_id) AS opening_base
+  FROM cte_calendar
+  LEFT JOIN cte_user_subscriptions
+    ON cte_calendar.start_of_month >= cte_user_subscriptions.subscription_start
+    AND cte_calendar.end_of_month <= cte_user_subscriptions.subscription_end
+  GROUP BY start_of_month
+),
+
+cte_new_users AS (
+  -- CTE is used to calculate number of new users. 
+  -- It is calculated by taking users who make first payment after the start of a particular month
+    SELECT 
+    cte_calendar.start_of_month,
+    COUNT(DISTINCT user_id) AS new_users
+  FROM cte_calendar
+  LEFT JOIN cte_user_subscriptions
+    ON cte_calendar.start_of_month < cte_user_subscriptions.subscription_start
+    AND cte_calendar.start_of_month = DATE_TRUNC(cte_user_subscriptions.subscription_start, MONTH)
+  GROUP BY start_of_month
+),
+
+cte_churned_users AS (
+  -- CTE is used to calculate number of churned users. 
+  -- It is calculated by taking users who's subscription ends before a particular month
+    SELECT 
+    cte_calendar.start_of_month,
+    COUNT(DISTINCT user_id) AS churned_users
+  FROM cte_calendar
+  LEFT JOIN cte_user_subscriptions
+    ON cte_calendar.end_of_month > cte_user_subscriptions.subscription_end
+    AND cte_calendar.start_of_month = DATE_TRUNC(cte_user_subscriptions.subscription_end, MONTH)
+  GROUP BY start_of_month
+),
+
+cte_recured_users AS (
+  -- CTE is used to calculate number of recured users. 
+  -- It is calculated by taking users who make recurring payments on a particular month
+  SELECT 
+    payment_month,
+    COUNT(DISTINCT user_id) AS recurred_users
+  FROM cte_user_subscriptions
+  WHERE user_payment_number > 1
+  GROUP BY 1
+),
+
+cte_user_payments AS (
+  -- CTE is used to calculate different types of billings and total revenue on a particular month.
+  SELECT
+    payment_month,
+    ROUND(SUM(CASE WHEN user_payment_number = 1 THEN payment_amount END), 2) AS new_billings,
+    ROUND(SUM(CASE WHEN user_payment_number > 1 THEN payment_amount END), 2) AS recurring_billings,
+    ROUND(SUM(payment_amount), 2) AS revenue
+  FROM cte_user_subscriptions
+  GROUP BY 1
+),
+
+/******************** Final User Base Board ********************/
+
+cte_customer_base AS (
+  SELECT 
+    cte_opening_base.start_of_month,
+    opening_base,
+    new_users,
+    churned_users,
+    IFNULL(recurred_users, 0) AS recurred_users,
+    opening_base + new_users - churned_users AS closing_base,
+    ROUND(new_users/opening_base, 2) AS acquisition_rate,
+    ROUND(churned_users/opening_base, 2) AS churn_rate,
+    ROUND((new_users - churned_users)/ opening_base, 2) AS net_increase,
+    IFNULL(new_billings, 0) AS new_billings,
+    IFNULL(recurring_billings, 0) AS recurring_billings,
+    IFNULL(revenue, 0) AS revenue
+  FROM cte_opening_base
+  LEFT JOIN cte_new_users
+    ON cte_opening_base.start_of_month = cte_new_users.start_of_month
+  LEFT JOIN cte_churned_users
+    ON cte_opening_base.start_of_month = cte_churned_users.start_of_month
+  LEFT JOIN cte_recured_users
+    ON cte_opening_base.start_of_month = cte_recured_users.payment_month
+  LEFT JOIN cte_user_payments
+    ON cte_opening_base.start_of_month = cte_user_payments.payment_month
+),
+
+/******************** Calculating Yearly Renewal Rate ********************/
+cte_daily_calendar AS (
+  -- CTE is used to create a calendar that will be used later to connect user subscription periods to
+  SELECT
+    payment_date AS day
+  FROM `homework-data2020.customer_data.raw_data` 
+  GROUP BY 1
+),
+
+cte_active_users_first_day AS (
+  -- CTE is used to calculate number of users who were active on the first day of each year
+  SELECT 
+    start_of_month AS year, 
+    opening_base
+  FROM cte_opening_base
+  WHERE EXTRACT(MONTH FROM start_of_month) = 1
+),
+
+cte_retained_users AS (
+  -- CTE is used to count number of users who have not churned during the measured year.
+  -- Daily calendar is used to eliminate users who had breaks in there activity period
+  SELECT 
+    DATE_TRUNC(cte_daily_calendar.day, YEAR) AS year,
+    COUNT(DISTINCT user_id) AS retained_users
+  FROM cte_daily_calendar
+  LEFT JOIN cte_user_subscriptions
+    ON DATE_TRUNC(cte_daily_calendar.day, YEAR) >= cte_user_subscriptions.payment_date 
+    AND LAST_DAY(cte_daily_calendar.day, YEAR) <= cte_user_subscriptions.next_billing_date
+  GROUP BY year
+),
+
+/******************** Final Yearly Renewal Rate ********************/
+
+cte_yearly_renewal_rate AS (
+  SELECT 
+    cte_active_users_first_day.year,
+    opening_base,
+    retained_users,
+    ROUND(retained_users/opening_base, 2) AS yearly_renewal_rate
+  FROM cte_active_users_first_day
+  INNER JOIN cte_retained_users
+    ON cte_active_users_first_day.year = cte_retained_users.year
+)
+SELECT *
+FROM cte_yearly_renewal_rate
+;
